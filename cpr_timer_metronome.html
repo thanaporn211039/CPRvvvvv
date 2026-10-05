@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CPR Timer & Metronome</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Noto Sans Thai"', 'sans-serif'],
+                        mono: ['"Courier New"', 'monospace'],
+                    },
+                    colors: {
+                        darkbg: '#0f172a',
+                        cardbg: '#1e293b',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #f8fafc;
+            touch-action: manipulation; /* Prevent double-tap zoom on mobile */
+        }
+        
+        .tabular-nums {
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Custom range slider styling */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]:focus {
+            outline: none;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 12px;
+            cursor: pointer;
+            background: #334155;
+            border-radius: 8px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            height: 28px;
+            width: 28px;
+            border-radius: 50%;
+            background: #ef4444;
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        }
+        input[type=range]:focus::-webkit-slider-thumb {
+            border: 2px solid #f8fafc;
+        }
+
+        /* Pulsing animation for the heart icon */
+        @keyframes pulse-beat {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .beat-active {
+            animation: pulse-beat 0.2s ease-out;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-md bg-cardbg rounded-3xl shadow-2xl overflow-hidden border border-slate-700 flex flex-col items-center p-6 sm:p-8">
+        
+        <!-- Header -->
+        <div class="flex items-center gap-3 mb-6">
+            <i class="fa-solid fa-heart-pulse text-red-500 text-3xl"></i>
+            <h1 class="text-2xl sm:text-3xl font-bold text-white tracking-wide">เครื่องจับเวลา CPR</h1>
+        </div>
+
+        <!-- Timer Display -->
+        <div class="relative flex justify-center items-center mb-8 w-full">
+            <div id="heart-indicator" class="absolute inset-0 m-auto text-slate-800 text-[10rem] sm:text-[12rem] flex justify-center items-center z-0 transition-colors duration-200">
+                <i class="fa-solid fa-heart opacity-20"></i>
+            </div>
+            <div id="time-display" class="text-7xl sm:text-8xl font-bold font-mono tabular-nums text-white z-10 drop-shadow-lg">
+                02:00
+            </div>
+        </div>
+
+        <!-- BPM Control -->
+        <div class="w-full bg-slate-800 rounded-2xl p-5 mb-8 border border-slate-700 shadow-inner">
+            <div class="flex justify-between items-end mb-3">
+                <span class="text-slate-400 font-semibold text-lg">ความเร็ว (BPM)</span>
+                <div class="flex items-baseline gap-1">
+                    <span id="bpm-value-display" class="text-3xl font-bold text-red-400 tabular-nums">120</span>
+                    <span class="text-slate-400 text-sm">ครั้ง/นาที</span>
+                </div>
+            </div>
+            <div class="flex items-center gap-4">
+                <span class="text-slate-500 font-bold">100</span>
+                <input type="range" id="bpm-slider" min="100" max="120" value="120" step="1">
+                <span class="text-slate-500 font-bold">120</span>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <button id="main-btn" class="w-full bg-red-600 hover:bg-red-500 active:bg-red-700 text-white text-2xl sm:text-3xl font-bold py-5 rounded-2xl shadow-lg transition-all transform active:scale-95 flex items-center justify-center gap-3">
+            <i id="btn-icon" class="fa-solid fa-play"></i>
+            <span id="btn-text">เริ่มกู้ชีพ (Start)</span>
+        </button>
+        
+        <!-- Instructional text -->
+        <p class="text-slate-400 text-sm mt-6 text-center leading-relaxed">
+            กดปุ่มเพื่อเริ่มจับเวลา 2 นาที<br>และให้จังหวะตามความเร็วที่ตั้งไว้
+        </p>
+
+    </div>
+
+    <script>
+        // State variables
+        let isRunning = false;
+        let timeLeft = 120; // 2 minutes in seconds
+        let currentBpm = 120;
+        let timerInterval = null;
+        let metronomeInterval = null;
+        let audioCtx = null;
+        let expectedNextBeatTime = 0;
+
+        // DOM Elements
+        const timeDisplay = document.getElementById('time-display');
+        const bpmSlider = document.getElementById('bpm-slider');
+        const bpmValueDisplay = document.getElementById('bpm-value-display');
+        const mainBtn = document.getElementById('main-btn');
+        const btnText = document.getElementById('btn-text');
+        const btnIcon = document.getElementById('btn-icon');
+        const heartIndicator = document.getElementById('heart-indicator');
+
+        // Initialize or resume AudioContext (required for browser policies)
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        // Play sound beep (short for beat, long for end)
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            const now = audioCtx.currentTime;
+
+            if (type === 'beat') {
+                // Short, sharp beep for metronome
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(800, now);
+                
+                gainNode.gain.setValueAtTime(1, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+                
+                osc.start(now);
+                osc.stop(now + 0.1);
+
+                // Visual feedback
+                triggerVisualBeat();
+            } else if (type === 'end') {
+                // Long warning beep for timer end
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(600, now);
+                
+                gainNode.gain.setValueAtTime(1, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 1.5);
+                
+                osc.start(now);
+                osc.stop(now + 1.5);
+            }
+        }
+
+        // Visual animation for the background heart
+        function triggerVisualBeat() {
+            const heartIcon = heartIndicator.querySelector('i');
+            heartIndicator.classList.remove('text-slate-800');
+            heartIndicator.classList.add('text-red-900/50');
+            heartIcon.classList.remove('beat-active');
+            
+            // Trigger reflow to restart animation
+            void heartIcon.offsetWidth; 
+            
+            heartIcon.classList.add('beat-active');
+            
+            setTimeout(() => {
+                heartIndicator.classList.remove('text-red-900/50');
+                heartIndicator.classList.add('text-slate-800');
+            }, 100);
+        }
+
+        // Format seconds to MM:SS
+        function updateTimeDisplay() {
+            const m = Math.floor(timeLeft / 60).toString().padStart(2, '0');
+            const s = (timeLeft % 60).toString().padStart(2, '0');
+            timeDisplay.innerText = `${m}:${s}`;
+        }
+
+        // Metronome loop logic
+        function scheduleNextBeat() {
+            if (!isRunning) return;
+            
+            const msPerBeat = 60000 / currentBpm;
+            const now = Date.now();
+            
+            // Play sound immediately if it's time
+            if (now >= expectedNextBeatTime) {
+                playSound('beat');
+                expectedNextBeatTime += msPerBeat;
+            }
+            
+            // Use setTimeout for better drift handling than setInterval
+            metronomeInterval = setTimeout(scheduleNextBeat, Math.max(0, expectedNextBeatTime - Date.now()));
+        }
+
+        // Handle BPM slider changes
+        bpmSlider.addEventListener('input', (e) => {
+            currentBpm = parseInt(e.target.value);
+            bpmValueDisplay.innerText = currentBpm;
+            
+            // If running, adjust the next beat timing
+            if (isRunning) {
+                clearTimeout(metronomeInterval);
+                expectedNextBeatTime = Date.now() + (60000 / currentBpm);
+                scheduleNextBeat();
+            }
+        });
+
+        // Timer countdown logic
+        function tickTimer() {
+            timeLeft--;
+            updateTimeDisplay();
+
+            if (timeLeft <= 0) {
+                stopApp();
+                playSound('end');
+                
+                // Set UI to Reset state
+                timeDisplay.innerText = "00:00";
+                timeDisplay.classList.add('text-red-500');
+                
+                mainBtn.classList.remove('bg-amber-500', 'hover:bg-amber-400', 'active:bg-amber-600');
+                mainBtn.classList.add('bg-blue-600', 'hover:bg-blue-500', 'active:bg-blue-700');
+                btnIcon.className = "fa-solid fa-rotate-right";
+                btnText.innerText = "ประเมินซ้ำ / เริ่มใหม่";
+                
+                timeLeft = 120; // reset for next use
+            }
+        }
+
+        function stopApp() {
+            isRunning = false;
+            clearInterval(timerInterval);
+            clearTimeout(metronomeInterval);
+        }
+
+        // Handle Start/Stop/Reset button click
+        mainBtn.addEventListener('click', () => {
+            initAudio();
+
+            if (isRunning) {
+                // User pressed STOP (Pause)
+                stopApp();
+                
+                mainBtn.classList.remove('bg-amber-500', 'hover:bg-amber-400', 'active:bg-amber-600');
+                mainBtn.classList.add('bg-green-600', 'hover:bg-green-500', 'active:bg-green-700');
+                btnIcon.className = "fa-solid fa-play";
+                btnText.innerText = "ทำต่อ (Resume)";
+            } else {
+                // User pressed START or RESET
+                isRunning = true;
+                
+                // Reset UI styles if returning from End state
+                timeDisplay.classList.remove('text-red-500');
+                updateTimeDisplay();
+                
+                // Update button UI to Stop state
+                mainBtn.classList.remove('bg-red-600', 'hover:bg-red-500', 'active:bg-red-700', 'bg-blue-600', 'hover:bg-blue-500', 'active:bg-blue-700', 'bg-green-600', 'hover:bg-green-500', 'active:bg-green-700');
+                mainBtn.classList.add('bg-amber-500', 'hover:bg-amber-400', 'active:bg-amber-600');
+                btnIcon.className = "fa-solid fa-pause";
+                btnText.innerText = "หยุดชั่วคราว (Pause)";
+
+                // Start timer
+                timerInterval = setInterval(tickTimer, 1000);
+                
+                // Start metronome
+                expectedNextBeatTime = Date.now();
+                scheduleNextBeat();
+            }
+        });
+
+        // Initial setup
+        updateTimeDisplay();
+
+    </script>
+</body>
+</html>
